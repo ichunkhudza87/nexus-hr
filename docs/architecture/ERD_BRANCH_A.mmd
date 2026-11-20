@@ -1,0 +1,155 @@
+erDiagram
+    departments ||--o{ positions : "defines"
+    departments ||--o{ employees : "employs"
+    positions ||--o{ employees : "assigns"
+    employees ||--o{ employee_schedules : "rostered_in"
+    shifts ||--o{ employee_schedules : "specifies"
+    employee_schedules ||--|| attendance : "fulfills"
+    employees ||--o{ attendance : "logs"
+    employees ||--o{ leave_requests : "requests"
+
+    branch_config {
+        uuid id PK "Enforced constant UUID"
+        varchar branch_code UK "Matches Central branch code"
+        varchar branch_name "Local branch name"
+        varchar operating_timezone "Operating timezone"
+        int attendance_grace_period_mins "Grace period minutes"
+        numeric max_overtime_hours_per_day "Max daily overtime cap"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    departments {
+        uuid id PK "Department ID"
+        varchar code UK "Department unique code"
+        varchar name "Department name"
+        text description "Department mandate"
+        boolean is_active "Active flag"
+        timestamptz created_at "Creation timestamp"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    positions {
+        uuid id PK "Position ID"
+        uuid department_id FK "Department reference"
+        varchar code UK "Position unique code"
+        varchar title "Job title"
+        varchar grade_level "Corporate grade"
+        boolean is_active "Active flag"
+        timestamptz created_at "Creation timestamp"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    employees {
+        uuid id PK "Global employee UUID"
+        varchar employee_code UK "Generated badge code (EMP-A-0001)"
+        uuid user_auth_id "Logical pointer to Central Auth"
+        uuid department_id FK "Department reference"
+        uuid position_id FK "Position reference (composite with dept)"
+        varchar full_name "Legal full name"
+        varchar email UK "Permanent corporate email"
+        varchar phone_number "Phone number"
+        varchar employment_status "Employment status enum"
+        date join_date "Join date"
+        date resignation_date "Resignation date"
+        boolean is_active "Active operational flag"
+        boolean is_deleted "Soft deletion flag"
+        timestamptz deleted_at "Soft deletion timestamp"
+        bigint version "Optimistic lock version"
+        timestamptz created_at "Creation timestamp"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    shifts {
+        uuid id PK "Shift ID"
+        varchar code UK "Shift unique code"
+        varchar name "Shift title"
+        time start_time "Start time"
+        time end_time "End time"
+        boolean is_overnight "Crosses midnight flag"
+        int break_duration_mins "Unpaid break minutes"
+        boolean is_active "Active flag"
+        timestamptz created_at "Creation timestamp"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    employee_schedules {
+        uuid id PK "Schedule ID"
+        uuid employee_id FK "Employee reference"
+        uuid shift_id FK "Shift reference"
+        date schedule_date "Date of schedule"
+        varchar status "Schedule status enum"
+        text notes "Management notes"
+        uuid created_by "Manager UUID"
+        timestamptz created_at "Creation timestamp"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    attendance {
+        uuid id PK "Attendance ID"
+        uuid schedule_id FK "1 to 1 unique schedule reference"
+        uuid employee_id FK "Employee reference (composite with schedule)"
+        date attendance_date "Date of attendance"
+        timestamptz check_in_time "Check-in timestamp"
+        timestamptz check_out_time "Check-out timestamp"
+        varchar status "Attendance status enum"
+        varchar check_in_method "Check-in channel"
+        varchar check_out_method "Check-out channel"
+        text check_in_notes "Check-in notes"
+        text check_out_notes "Check-out notes"
+        varchar check_in_ip "Check-in client IP"
+        varchar check_out_ip "Check-out client IP"
+        boolean is_verified "Manager verification flag"
+        uuid verified_by "Manager UUID who verified"
+        timestamptz created_at "Creation timestamp"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    leave_requests {
+        uuid id PK "Leave request ID"
+        uuid employee_id FK "Employee reference"
+        varchar leave_type "Leave type enum"
+        date start_date "Start date"
+        date end_date "End date"
+        numeric total_days "Requested days"
+        text reason "Leave justification"
+        varchar status "Approval state enum"
+        timestamptz submitted_at "Submission timestamp"
+        uuid approved_by "Manager UUID"
+        timestamptz approved_at "Approval timestamp"
+        text rejection_reason "Rejection justification"
+        timestamptz created_at "Creation timestamp"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    sync_outbox {
+        uuid id PK "Outbox entry ID"
+        uuid event_id UK "Globally unique event UUID"
+        varchar aggregate_type "Domain aggregate"
+        uuid aggregate_id "Modified entity ID"
+        bigint aggregate_version "Monotonic sequence number"
+        varchar event_type "Event classification"
+        jsonb payload "Immutable entity snapshot"
+        varchar status "Delivery status"
+        varchar locked_by "Worker lease claim"
+        timestamptz locked_at "Lease established time"
+        int retry_count "Transmission attempts"
+        timestamptz next_retry_at "Next eligible retry"
+        text last_error "Diagnostic error text"
+        timestamptz created_at "Creation timestamp"
+        timestamptz published_at "Ack timestamp"
+    }
+
+    audit_logs {
+        uuid id PK "Audit log entry ID"
+        uuid actor_id "User UUID who acted"
+        varchar actor_email "Email of actor"
+        uuid branch_id "Branch identifier"
+        varchar action "Executed action tag"
+        varchar entity_type "Target entity name"
+        uuid entity_id "Target record UUID"
+        jsonb old_values "Pre-mutation state"
+        jsonb new_values "Post-mutation state"
+        varchar ip_address "Client IP address"
+        text user_agent "Client user agent"
+        timestamptz created_at "Log creation timestamp"
+    }

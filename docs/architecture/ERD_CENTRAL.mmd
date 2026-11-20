@@ -1,0 +1,109 @@
+erDiagram
+    branches ||--o{ user_profiles : "assigns"
+    branches ||--o{ employee_directory : "projects"
+    branches ||--o{ attendance_daily_summaries : "aggregates"
+    branches ||--o{ audit_logs : "audits"
+
+    branches {
+        uuid id PK "Branch identifier"
+        varchar code UK "Unique branch code"
+        varchar name "Branch operational name"
+        varchar timezone "IANA timezone standard"
+        text address "Physical facility address"
+        varchar phone_number "Contact telephone"
+        boolean is_active "Operational status flag"
+        timestamptz created_at "Creation timestamp"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    user_profiles {
+        uuid id PK "Matches auth.users id"
+        varchar email UK "User login email"
+        varchar full_name "Full legal name"
+        varchar role "Role enum"
+        uuid branch_id FK "Assigned branch"
+        text avatar_url "Profile avatar URL"
+        boolean is_active "Active access flag"
+        timestamptz created_at "Creation timestamp"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    employee_directory {
+        uuid id PK "Global employee UUID"
+        uuid branch_id FK "Local branch reference"
+        varchar employee_code "Branch employee badge code"
+        varchar full_name "Employee full name"
+        varchar email "Contact email"
+        varchar department_name "Denormalized department"
+        varchar position_title "Denormalized position"
+        varchar employment_status "Contract type"
+        date join_date "Join date"
+        boolean is_active "Active employment flag"
+        timestamptz last_synced_at "Sync projection timestamp"
+        bigint version "Monotonic aggregate version"
+        timestamptz created_at "Creation timestamp"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    attendance_daily_summaries {
+        uuid id PK "Summary record identifier"
+        uuid branch_id FK "Target branch reference"
+        date summary_date "Date of attendance summary"
+        int total_employees "Total scheduled employees"
+        int present_count "On-time check-ins"
+        int late_count "Late check-ins"
+        int absent_count "Absent employees"
+        int leave_count "Employees on leave"
+        timestamptz last_synced_at "Last synced timestamp"
+        bigint source_version "Rollup version from branch"
+        timestamptz created_at "Creation timestamp"
+        timestamptz updated_at "Update timestamp"
+    }
+
+    sync_inbox {
+        uuid id PK "Inbox entry ID"
+        uuid event_id UK "Unique event ID from outbox"
+        varchar source_node "Source branch identifier"
+        varchar event_type "Event classification"
+        varchar aggregate_type "Domain aggregate"
+        uuid aggregate_id "Entity primary key"
+        bigint aggregate_version "Monotonic sequence number"
+        int schema_version "Schema contract version"
+        jsonb payload "Full entity snapshot"
+        varchar status "Processing status"
+        varchar locked_by "Worker lease claim"
+        timestamptz locked_at "Lease established time"
+        text error_message "Diagnostic error text"
+        int retry_count "Processing attempts"
+        timestamptz next_retry_at "Next eligible retry"
+        timestamptz received_at "Ingestion timestamp"
+        timestamptz processed_at "Completion timestamp"
+    }
+
+    sync_runs {
+        uuid id PK "Sync batch run ID"
+        varchar source_node "Originating node"
+        varchar target_node "Receiving node"
+        int batch_size "Events in batch"
+        int events_synced "Successfully synced count"
+        int events_failed "Failed count"
+        varchar status "Run execution state"
+        timestamptz started_at "Run start time"
+        timestamptz completed_at "Run completion time"
+        jsonb log_summary "Execution telemetry"
+    }
+
+    audit_logs {
+        uuid id PK "Audit log entry ID"
+        uuid actor_id "User UUID who acted"
+        varchar actor_email "Email of actor"
+        uuid branch_id FK "Target branch reference"
+        varchar action "Executed action tag"
+        varchar entity_type "Target entity name"
+        uuid entity_id "Target record UUID"
+        jsonb old_values "Pre-mutation state"
+        jsonb new_values "Post-mutation state"
+        varchar ip_address "Client IP address"
+        text user_agent "Client user agent"
+        timestamptz created_at "Log creation timestamp"
+    }

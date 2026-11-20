@@ -1,0 +1,71 @@
+sequenceDiagram
+    autonumber
+    actor User as Operational User / HR
+    participant App as Branch API Server
+    participant BranchDB as Node 2: nexus-branch-a (Postgres)
+    participant Outbox as Branch A sync_outbox
+    participant Worker as Scheduled Sync Worker (Node.js)
+    participant CentralDB as Node 1: nexus-central (Postgres)
+    participant Inbox as Central sync_inbox
+    participant Directory as Central employee_directory
+    participant Summaries as Central attendance_daily_summaries
+
+    %% Phase 1: Local ACID Transaction
+    rect rgb(235, 245, 255)
+        Note over User, Outbox: 1. Local ACID Transaction (Branch A Operational Master)
+        User->>App: Check-in Attendance / Update Employee
+        App->>BranchDB: BEGIN TRANSACTION
+        App->>BranchDB: INSERT/UPDATE domain entity (e.g., attendance)
+        App->>Outbox: INSERT INTO sync_outbox (event_id, aggregate_type, aggregate_id, aggregate_version, event_type, payload, status='PENDING')
+        App->>BranchDB: COMMIT TRANSACTION
+        BranchDB-->>App: Local Transaction Committed
+        App-->>User: Operation Confirmed (Sub-10ms response)
+    end
+
+    %% Phase 2: Scheduled Batch Claim & Dispatch
+    rect rgb(255, 250, 235)
+        Note over Worker, CentralDB: 2. Scheduled Batch Claim with Optimistic Lease
+        Worker->>Outbox: BEGIN CLAIM TX: SELECT id FROM sync_outbox WHERE status='PENDING' OR (status='PROCESSING' AND locked_at < now() - INTERVAL '5 min') FOR UPDATE SKIP LOCKED
+        Outbox-->>Worker: Return Pending Batch
+        Worker->>Outbox: UPDATE sync_outbox SET status='PROCESSING', locked_by=:worker_id, locked_at=now() WHERE id IN (...)
+        Worker->>Outbox: COMMIT CLAIM TX (Row locks released; Lease held)
+        alt Events Available in Batch
+            Worker->>CentralDB: POST / Ingestion Batch to Central
+            CentralDB->>Inbox: INSERT INTO sync_inbox (event_id, source_node, aggregate_type, aggregate_id, aggregate_version, payload, status='RECEIVED') ON CONFLICT (event_id) DO NOTHING
+            Inbox-->>CentralDB: Rows Inserted / Deduplicated
+            CentralDB-->>Worker: HTTP 200 / Durable Ingestion Acknowledged
+            Worker->>Outbox: UPDATE sync_outbox SET status='PUBLISHED', published_at=now() WHERE id IN (...) AND locked_by=:worker_id
+        else No Events
+            Worker->>Worker: Finish execution run safely (Awaits next schedule)
+        end
+    end
+
+    %% Phase 3: Central Idempotent Projection Materialization
+    rect rgb(240, 255, 240)
+        Note over CentralDB, Summaries: 3. Idempotent Ingestion & Versioned Projection Materialization
+        CentralDB->>Inbox: SELECT * FROM sync_inbox WHERE status='RECEIVED' ORDER BY received_at ASC FOR UPDATE SKIP LOCKED
+        loop Process Ingested Event
+            alt Event: EMPLOYEE_UPSERTED
+                Inbox->>Directory: UPSERT INTO employee_directory WHERE incoming.version > current.version
+                Directory-->>Inbox: Directory Projection Updated
+                Inbox->>Inbox: UPDATE sync_inbox SET status='PROCESSED', processed_at=now()
+            else Event: ATTENDANCE_SUMMARY_RECORDED
+                Inbox->>Summaries: UPSERT INTO attendance_daily_summaries WHERE incoming.source_version > current.source_version
+                Summaries-->>Inbox: Summary Projection Updated
+                Inbox->>Inbox: UPDATE sync_inbox SET status='PROCESSED', processed_at=now()
+            else Transient Ingestion Failure
+                Inbox->>Inbox: UPDATE sync_inbox SET retry_count = retry_count + 1, next_retry_at = now() + backoff, status='FAILED'
+            else Retries Exceeded (> 5 attempts)
+                Inbox->>Inbox: UPDATE sync_inbox SET status='DEAD_LETTER', error_message='Terminal validation error'
+            end
+        end
+    end
+
+    %% Phase 4: Centralized Corporate Reporting
+    rect rgb(250, 240, 255)
+        Note over User, Summaries: 4. Central Corporate Query
+        User->>CentralDB: Corporate HR queries Consolidated Attendance & Directory
+        CentralDB->>Summaries: SELECT * FROM attendance_daily_summaries WHERE branch_id=:branch_id
+        CentralDB->>Directory: SELECT * FROM employee_directory WHERE is_active=true
+        CentralDB-->>User: Instant Consolidated Executive Dashboard (Eventually Consistent)
+    end

@@ -1,0 +1,25 @@
+{
+  "name": "nexus-hr-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NEXUS HR Zero-Trust Backend API Gateway for Central Auth -> Branch A PostgreSQL RPCs",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "node src/index.ts",
+    "test": "node --test src/__tests__/*.test.ts",
+    "sync": "node src/sync/run-sync.ts",
+    "sync:watch": "node src/sync/run-sync.ts --watch",
+    "sync:partition": "node src/sync/run-sync.ts --simulate-partition",
+    "provision:preview": "node scripts/provision-hmac.ts --preview",
+    "provision:execute": "node scripts/provision-hmac.ts --execute"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}

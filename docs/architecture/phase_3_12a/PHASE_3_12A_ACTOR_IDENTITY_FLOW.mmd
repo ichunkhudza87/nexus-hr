@@ -1,0 +1,59 @@
+sequenceDiagram
+    autonumber
+    actor User as End User (Browser / Mobile)
+    participant CAuth as Central Supabase Auth (wcmevigbqsmzsdqidjel)
+    participant GW as Backend API Gateway (Trusted Server)
+    participant CDB as Central DB (user_profiles + branches)
+    participant BPostgREST as Branch A PostgREST (uneycmbqqpkifwhwzbes)
+    participant BRPC as Branch A RPC (SECURITY DEFINER, postgres)
+    participant Internal as nexus_internal (Keys, Nonces, tx_actor_context)
+    participant BData as Branch A Tables (leave_requests, employees, audit_logs)
+
+    Note over User,BData: === PHASE 1: CENTRAL AUTHENTICATION & GATEWAY VERIFICATION ===
+    User->>CAuth: Login with email/password
+    CAuth-->>User: Issues Central JWT (signed by Central JWKS)
+    User->>GW: HTTPS Request + Bearer <Central_JWT> (leave decision)
+    GW->>GW: Verify JWT signature via Central JWKS, iss, aud, exp, sub
+    GW->>CDB: Query user_profiles + branches WHERE id = jwt.sub
+    CDB-->>GW: Authoritative role, email, branch_id, is_active
+    alt Missing/Inactive Profile or Mismatched Branch
+        GW-->>User: 401/403 Fail Closed (Rejected)
+    end
+    GW->>BData: Resolve active employee WHERE user_auth_id = jwt.sub
+    alt BRANCH_MANAGER with NULL/inactive/deleted employee
+        GW-->>User: 403 Fail Closed (Missing Employee Identity)
+    end
+
+    Note over GW,Internal: === PHASE 2: CRYPTOGRAPHIC ACTOR PROPAGATION ===
+    GW->>GW: Build canonical payload (action|target|actor|email|role|branch|emp|exp|nonce)
+    GW->>GW: Sign with GATEWAY_ACTOR_HMAC_KEY (HMAC-SHA256, TTL=60s)
+    GW->>BPostgREST: POST /rpc/rpc_branch_decide_leave_request (Bearer service_role)
+    BPostgREST->>BRPC: SET LOCAL ROLE service_role + Execute RPC
+    BRPC->>Internal: Read hmac_secret from nexus_internal.gateway_signing_keys
+    BRPC->>BRPC: Verify exp window (<=120s) + Constant-time HMAC match
+    alt Invalid HMAC or Expired Credential
+        BRPC-->>GW: 401/403 Exception (Zero DB Mutation)
+    end
+    BRPC->>Internal: INSERT nonce INTO nexus_internal.used_actor_nonces ON CONFLICT DO NOTHING
+    alt Duplicate Nonce (Replayed Envelope)
+        BRPC-->>GW: 403 Exception (Replay Blocked)
+    end
+    BRPC->>BData: Cross-check branch_config + employees live active status
+    BRPC->>Internal: INSERT verified actor INTO nexus_internal.tx_actor_context (txid)
+
+    Note over BRPC,BData: === PHASE 3: FAIL-CLOSED TRIGGER & IMMUTABLE AUDIT ===
+    BRPC->>BData: UPDATE leave_requests (SELECT ... FOR UPDATE first)
+    BData->>Internal: Trigger trg_01_enforce_leave_decision reads tx_actor_context(txid)
+    BData->>BData: Enforce role rules, no self-approval, IS DISTINCT FROM checks
+    BData->>BData: AFTER Trigger record_branch_audit_log writes actor_id + distinct action
+    BRPC->>Internal: DELETE tx_actor_context WHERE txid = pg_current_xact_id()
+    BRPC-->>GW: 200 OK (Updated record)
+    GW-->>User: 200 OK
+
+    Note over User,BData: === REJECTED ATTACK VECTORS ===
+    rect rgb(60, 20, 20)
+        User->>BPostgREST: Direct POST /rpc/rpc_branch_decide_leave_request (anon/authenticated)
+        BPostgREST-->>User: 403 Permission Denied (42501 EXECUTE Revoked)
+        GW->>BPostgREST: Direct PATCH /leave_requests (service_role without RPC/tx_actor_context)
+        BPostgREST-->>GW: Exception (Trigger Fails Closed - Missing Verified Context)
+    end
